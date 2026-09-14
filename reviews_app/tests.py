@@ -1,7 +1,13 @@
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.urls import reverse
+from django.utils import timezone
+from rest_framework import status
+from rest_framework.test import APITestCase
 
 from profile_app.models import Profile
 from reviews_app.api.serializers import (
@@ -320,5 +326,299 @@ class ReviewSerializerTests(TestCase):
             description='Great collaboration.',
         )
 
+class ReviewListCreateViewTests(APITestCase):
+    """Tests for review list and create endpoints."""
+
+    def setUp(self):
+        self.customer = User.objects.create_user(username='apiCustomer')
+        self.customer_two = User.objects.create_user(username='apiCustomerTwo')
+        self.business = User.objects.create_user(username='apiBusiness')
+        self.business_two = User.objects.create_user(username='apiBusinessTwo')
+        self.business_three = User.objects.create_user(username='apiBusinessThree')
+        self.no_profile_user = User.objects.create_user(username='apiNoProfile')
+        self._create_profiles()
+        self._create_reviews()
+        self.url = reverse('reviews_app:review-list')
+
+    def test_get_authenticated_customer_returns_ok(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_get_authenticated_business_returns_ok(self):
+        response = self._get_as(self.business)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_get_unauthenticated_returns_unauthorized(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_get_response_is_plain_list(self):
+        response = self._get_as(self.customer)
+        self.assertIsInstance(response.data, list)
+
+    def test_get_response_field_set_is_exact(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(set(response.data[0].keys()), self._review_fields())
+
+    def test_get_returns_all_reviews_without_filters(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(len(response.data), 3)
+
+    def test_business_user_filter_includes_matching_reviews(self):
+        response = self._get_as(
+            self.customer,
+            f'{self.url}?business_user_id={self.business.id}',
+        )
+        self.assertEqual(self._ids(response), {self.review_a.id, self.review_c.id})
+
+    def test_business_user_filter_excludes_other_businesses(self):
+        response = self._get_as(
+            self.customer,
+            f'{self.url}?business_user_id={self.business.id}',
+        )
+        self.assertNotIn(self.review_b.id, self._ids(response))
+
+    def test_reviewer_filter_includes_matching_reviews(self):
+        response = self._get_as(
+            self.customer,
+            f'{self.url}?reviewer_id={self.customer.id}',
+        )
+        self.assertEqual(self._ids(response), {self.review_a.id, self.review_b.id})
+
+    def test_reviewer_filter_excludes_other_reviewers(self):
+        response = self._get_as(
+            self.customer,
+            f'{self.url}?reviewer_id={self.customer.id}',
+        )
+        self.assertNotIn(self.review_c.id, self._ids(response))
+
+    def test_combined_filters_apply_together(self):
+        response = self._get_as(
+            self.customer,
+            self._combined_filter_url(),
+        )
+        self.assertEqual(self._ids(response), {self.review_a.id})
+
+    def test_ordering_updated_at_is_supported(self):
+        response = self._get_as(self.customer, f'{self.url}?ordering=updated_at')
+        self.assertEqual(self._ordered_ids(response), [
+            self.review_a.id,
+            self.review_b.id,
+            self.review_c.id,
+        ])
+
+    def test_ordering_desc_updated_at_is_supported(self):
+        response = self._get_as(self.customer, f'{self.url}?ordering=-updated_at')
+        self.assertEqual(self._ordered_ids(response), [
+            self.review_c.id,
+            self.review_b.id,
+            self.review_a.id,
+        ])
+
+    def test_ordering_rating_is_supported(self):
+        response = self._get_as(self.customer, f'{self.url}?ordering=rating')
+        self.assertEqual(self._ratings(response), [2, 3, 5])
+
+    def test_ordering_desc_rating_is_supported(self):
+        response = self._get_as(self.customer, f'{self.url}?ordering=-rating')
+        self.assertEqual(self._ratings(response), [5, 3, 2])
+
+    def test_invalid_ordering_does_not_crash(self):
+        response = self._get_as(self.customer, f'{self.url}?ordering=reviewer')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_customer_can_create_review(self):
+        response = self._post_as(self.customer, self._valid_payload())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_business_user_cannot_create_review(self):
+        response = self._post_as(self.business, self._valid_payload())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_user_without_profile_cannot_create_review(self):
+        response = self._post_as(self.no_profile_user, self._valid_payload())
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_cannot_create_review(self):
+        response = self.client.post(self.url, self._valid_payload(), format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_created_reviewer_is_request_user(self):
+        response = self._post_as(self.customer_two, self._valid_payload())
+        review = Review.objects.get(id=response.data['id'])
+        self.assertEqual(review.reviewer, self.customer_two)
+
+    def test_created_business_user_is_stored(self):
+        response = self._post_as(self.customer, self._valid_payload())
+        self.assertEqual(response.data['business_user'], self.business_three.id)
+
+    def test_created_rating_is_stored(self):
+        response = self._post_as(self.customer, self._valid_payload(rating=5))
+        self.assertEqual(response.data['rating'], 5)
+
+    def test_created_description_is_stored(self):
+        response = self._post_as(self.customer, self._valid_payload())
+        self.assertEqual(response.data['description'], 'Alles war toll!')
+
+    def test_post_response_field_set_is_exact(self):
+        response = self._post_as(self.customer, self._valid_payload())
+        self.assertEqual(set(response.data.keys()), self._review_fields())
+
+    def test_customer_target_is_rejected(self):
+        response = self._post_as(
+            self.customer,
+            self._valid_payload(business_user=self.customer.id),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_target_without_profile_is_rejected(self):
+        response = self._post_as(
+            self.customer,
+            self._valid_payload(business_user=self.no_profile_user.id),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_nonexistent_business_user_is_rejected(self):
+        response = self._post_as(
+            self.customer,
+            self._valid_payload(business_user=999),
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rating_below_one_is_rejected(self):
+        response = self._post_as(self.customer, self._valid_payload(rating=0))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rating_above_five_is_rejected(self):
+        response = self._post_as(self.customer, self._valid_payload(rating=6))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_malformed_rating_is_rejected(self):
+        response = self._post_as(self.customer, self._valid_payload(rating='bad'))
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_client_supplied_reviewer_is_rejected(self):
+        payload = self._valid_payload(reviewer=self.customer_two.id)
+        response = self._post_as(self.customer, payload)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_duplicate_review_is_rejected(self):
+        payload = self._valid_payload(business_user=self.business.id)
+        response = self._post_as(self.customer, payload)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_same_customer_may_review_another_business(self):
+        response = self._post_as(self.customer, self._valid_payload())
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_another_customer_may_review_same_business(self):
+        payload = self._valid_payload(business_user=self.business_two.id)
+        response = self._post_as(self.customer_two, payload)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_auth_route_still_resolves(self):
+        self.assertEqual(reverse('auth_app:login'), '/api/login/')
+
+    def test_profile_route_still_resolves(self):
+        url = reverse('profile_app:profile-detail', kwargs={'pk': self.customer.id})
+        self.assertEqual(url, f'/api/profile/{self.customer.id}/')
+
+    def test_offer_route_still_resolves(self):
+        self.assertEqual(reverse('offers_app:offer-create'), '/api/offers/')
+
+    def test_orders_route_still_resolves(self):
+        self.assertEqual(reverse('orders_app:order-create'), '/api/orders/')
+
+    def test_order_count_route_still_resolves(self):
+        url = reverse(
+            'orders_app:order-count',
+            kwargs={'business_user_id': self.business.id},
+        )
+        self.assertEqual(url, f'/api/order-count/{self.business.id}/')
+
+    def test_completed_order_count_route_still_resolves(self):
+        url = reverse(
+            'orders_app:completed-order-count',
+            kwargs={'business_user_id': self.business.id},
+        )
+        self.assertEqual(
+            url,
+            f'/api/completed-order-count/{self.business.id}/',
+        )
+
+    def _create_profiles(self):
+        Profile.objects.create(user=self.customer, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.customer_two, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.business, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.business_two, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.business_three, type=Profile.BUSINESS)
+
+    def _create_reviews(self):
+        self.review_a = self._create_review(self.business, self.customer, 2)
+        self.review_b = self._create_review(self.business_two, self.customer, 5)
+        self.review_c = self._create_review(self.business, self.customer_two, 3)
+        self._set_updated_at_values()
+
+    def _set_updated_at_values(self):
+        base_time = timezone.now()
+        self._set_updated_at(self.review_a, base_time + timedelta(seconds=1))
+        self._set_updated_at(self.review_b, base_time + timedelta(seconds=2))
+        self._set_updated_at(self.review_c, base_time + timedelta(seconds=3))
+
+    def _set_updated_at(self, review, value):
+        Review.objects.filter(pk=review.pk).update(updated_at=value)
+        review.updated_at = value
+
+    def _create_review(self, business_user, reviewer, rating):
+        return Review.objects.create(
+            business_user=business_user,
+            reviewer=reviewer,
+            rating=rating,
+            description='Existing review.',
+        )
+
+    def _valid_payload(self, business_user=None, rating=4, reviewer=None):
+        payload = {
+            'business_user': business_user or self.business_three.id,
+            'rating': rating,
+            'description': 'Alles war toll!',
+        }
+        if reviewer is not None:
+            payload['reviewer'] = reviewer
+        return payload
+
+    def _get_as(self, user, url=None):
+        self.client.force_authenticate(user=user)
+        return self.client.get(url or self.url)
+
+    def _post_as(self, user, payload):
+        self.client.force_authenticate(user=user)
+        return self.client.post(self.url, payload, format='json')
+
+    def _combined_filter_url(self):
+        return (
+            f'{self.url}?business_user_id={self.business.id}'
+            f'&reviewer_id={self.customer.id}'
+        )
+
+    def _review_fields(self):
+        return {
+            'id',
+            'business_user',
+            'reviewer',
+            'rating',
+            'description',
+            'created_at',
+            'updated_at',
+        }
+
+    def _ids(self, response):
+        return {item['id'] for item in response.data}
+
+    def _ordered_ids(self, response):
+        return [item['id'] for item in response.data]
+
+    def _ratings(self, response):
+        return [item['rating'] for item in response.data]
 
 
