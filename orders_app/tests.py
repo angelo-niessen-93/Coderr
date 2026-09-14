@@ -1174,3 +1174,142 @@ class OrderCountViewTests(APITestCase):
             features=['Logo', 'Source file'],
             offer_type=OfferDetail.BASIC,
         )
+
+
+class CompletedOrderCountViewTests(APITestCase):
+    """Tests for the completed order count endpoint."""
+
+    def setUp(self):
+        self.customer = User.objects.create_user(username='customerCompleted')
+        self.business_a = User.objects.create_user(username='businessDoneA')
+        self.business_b = User.objects.create_user(username='businessDoneB')
+        self.no_profile_user = User.objects.create_user(username='noDoneProfile')
+        Profile.objects.create(user=self.customer, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.business_a, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.business_b, type=Profile.BUSINESS)
+        self._create_order_data()
+        self.url = reverse(
+            'orders_app:completed-order-count',
+            kwargs={'business_user_id': self.business_a.id},
+        )
+
+    def test_authenticated_customer_can_call_endpoint(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_authenticated_business_can_call_endpoint(self):
+        response = self._get_as(self.business_b)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_valid_business_user_returns_ok(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_response_field_set_is_exact(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(set(response.data.keys()), {'completed_order_count'})
+
+    def test_correct_integer_count_is_returned(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(response.data['completed_order_count'], 2)
+        self.assertIsInstance(response.data['completed_order_count'], int)
+
+    def test_counts_completed_only(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(response.data, {'completed_order_count': 2})
+
+    def test_in_progress_orders_are_excluded(self):
+        response = self._get_as(self.customer)
+        self.assertNotEqual(response.data['completed_order_count'], 3)
+
+    def test_cancelled_orders_are_excluded(self):
+        response = self._get_as(self.customer)
+        self.assertNotEqual(response.data['completed_order_count'], 3)
+
+    def test_other_business_orders_are_excluded(self):
+        response = self._get_as(self.customer)
+        self.assertEqual(response.data['completed_order_count'], 2)
+
+    def test_zero_completed_orders_returns_zero(self):
+        Order.objects.filter(business_user=self.business_a).update(
+            status=Order.IN_PROGRESS,
+        )
+        response = self._get_as(self.customer)
+        self.assertEqual(response.data, {'completed_order_count': 0})
+
+    def test_nonexistent_user_returns_not_found(self):
+        response = self._get_as(
+            self.customer,
+            reverse(
+                'orders_app:completed-order-count',
+                kwargs={'business_user_id': 999},
+            ),
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_customer_user_returns_not_found(self):
+        url = reverse(
+            'orders_app:completed-order-count',
+            kwargs={'business_user_id': self.customer.id},
+        )
+        response = self._get_as(self.business_a, url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_user_without_profile_returns_not_found(self):
+        url = reverse(
+            'orders_app:completed-order-count',
+            kwargs={'business_user_id': self.no_profile_user.id},
+        )
+        response = self._get_as(self.customer, url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_unauthenticated_returns_unauthorized(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_get_orders_list_still_works(self):
+        response = self._get_as(self.customer, reverse('orders_app:order-create'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_patch_orders_detail_still_works(self):
+        order = Order.objects.filter(business_user=self.business_a).first()
+        self.client.force_authenticate(user=self.business_a)
+        response = self.client.patch(
+            reverse('orders_app:order-detail', kwargs={'pk': order.id}),
+            {'status': Order.COMPLETED},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_order_count_endpoint_still_works(self):
+        url = reverse(
+            'orders_app:order-count',
+            kwargs={'business_user_id': self.business_a.id},
+        )
+        response = self._get_as(self.customer, url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def _get_as(self, user, url=None):
+        self.client.force_authenticate(user=user)
+        return self.client.get(url or self.url)
+
+    def _create_order_data(self):
+        self._create_order(self.business_a, Order.COMPLETED)
+        self._create_order(self.business_a, Order.COMPLETED)
+        self._create_order(self.business_a, Order.IN_PROGRESS)
+        self._create_order(self.business_a, Order.CANCELLED)
+        self._create_order(self.business_b, Order.COMPLETED)
+
+    def _create_order(self, business_user, order_status):
+        return Order.objects.create(
+            customer_user=self.customer,
+            business_user=business_user,
+            title='Logo Design',
+            revisions=2,
+            delivery_time_in_days=5,
+            price=Decimal('99.99'),
+            features=['Logo', 'Source file'],
+            offer_type=Order.BASIC,
+            status=order_status,
+        )
+

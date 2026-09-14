@@ -83,7 +83,18 @@ class OrderStatusUpdateView(RetrieveUpdateDestroyAPIView):
         self.object = serializer.save()
 
 
-class OrderCountView(APIView):
+class BusinessUserValidationMixin:
+    """Validate that a user ID belongs to a business profile."""
+
+    def _get_business_profile(self, business_user_id):
+        return get_object_or_404(
+            Profile,
+            user_id=business_user_id,
+            type=Profile.BUSINESS,
+        )
+
+
+class OrderCountView(BusinessUserValidationMixin, APIView):
     """Return in-progress order count for a business user."""
 
     permission_classes = [IsAuthenticated]
@@ -94,15 +105,27 @@ class OrderCountView(APIView):
             'order_count': self._in_progress_count(business_user_id),
         })
 
-    def _get_business_profile(self, business_user_id):
-        return get_object_or_404(
-            Profile,
-            user_id=business_user_id,
-            type=Profile.BUSINESS,
-        )
-
     def _in_progress_count(self, business_user_id):
         return Order.objects.filter(
             business_user_id=business_user_id,
             status=Order.IN_PROGRESS,
         ).count()
+
+
+class CompletedOrderCountView(BusinessUserValidationMixin, APIView):
+    """Return completed order count for a business user."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, business_user_id):
+        self._get_business_profile(business_user_id)
+        return Response({
+            'completed_order_count': self._completed_count(business_user_id),
+        })
+
+    def _completed_count(self, business_user_id):
+        return Order.objects.filter(
+            business_user_id=business_user_id,
+            status=Order.COMPLETED,
+        ).count()
+
