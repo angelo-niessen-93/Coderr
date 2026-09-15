@@ -36,6 +36,7 @@ class OrderCreateSerializer(serializers.Serializer):
     offer_detail_id = serializers.IntegerField()
 
     def validate(self, attrs):
+        """Reject fields other than offer_detail_id."""
         unexpected_fields = set(self.initial_data) - {'offer_detail_id'}
         if unexpected_fields:
             raise serializers.ValidationError(
@@ -45,6 +46,7 @@ class OrderCreateSerializer(serializers.Serializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        """Create an immutable order snapshot from an offer detail."""
         customer_user = validated_data['customer_user']
         offer_detail = validated_data['offer_detail']
         return Order.objects.create(
@@ -67,6 +69,7 @@ class OrderStatusUpdateSerializer(serializers.ModelSerializer):
         fields = ['status']
 
     def validate(self, attrs):
+        """Allow status-only order updates."""
         if 'status' not in self.initial_data:
             raise serializers.ValidationError(
                 {'status': 'This field is required.'}

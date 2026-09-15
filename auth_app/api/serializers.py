@@ -20,16 +20,19 @@ class RegistrationSerializer(serializers.Serializer):
     type = serializers.ChoiceField(choices=Profile.PROFILE_TYPE_CHOICES)
 
     def validate_username(self, value):
+        """Reject usernames that are already registered."""
         if User.objects.filter(username=value).exists():
             raise serializers.ValidationError('This username is already taken.')
         return value
 
     def validate_email(self, value):
+        """Reject email addresses that are already registered."""
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError('This email is already taken.')
         return value
 
     def validate(self, attrs):
+        """Ensure both submitted passwords match."""
         if attrs['password'] != attrs['repeated_password']:
             raise serializers.ValidationError(
                 {'repeated_password': 'Passwords do not match.'}
@@ -37,6 +40,7 @@ class RegistrationSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
+        """Create a user, profile, and authentication token."""
         profile_type = validated_data.pop('type')
         validated_data.pop('repeated_password')
         user = User.objects.create_user(**validated_data)
@@ -52,6 +56,7 @@ class LoginSerializer(serializers.Serializer):
     password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
+        """Authenticate credentials with Django and attach the user."""
         user = authenticate(
             username=attrs['username'],
             password=attrs['password'],

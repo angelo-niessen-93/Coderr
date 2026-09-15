@@ -13,18 +13,39 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def _load_env_file():
+    """Load local .env values without overriding real environment variables."""
+    env_path = BASE_DIR / '.env'
+    if not env_path.exists():
+        return
+    for line in env_path.read_text().splitlines():
+        if line and not line.startswith('#') and '=' in line:
+            key, value = line.split('=', 1)
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+def _required_env(name):
+    """Return a required environment value or fail with a clear error."""
+    value = os.environ.get(name)
+    if not value:
+        raise ImproperlyConfigured(f'{name} must be set in the environment.')
+    return value
+
+
+_load_env_file()
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = os.environ.get(
-    'DJANGO_SECRET_KEY',
-    'development-insecure-secret-key-change-me',
-)
+SECRET_KEY = _required_env('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.environ.get('DJANGO_DEBUG', 'True') == 'True'

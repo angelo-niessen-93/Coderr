@@ -11,6 +11,7 @@ class EmptyStringRepresentationMixin:
     empty_string_fields = ()
 
     def to_representation(self, instance):
+        """Replace configured null text values with empty strings."""
         data = super().to_representation(instance)
         for field in self.empty_string_fields:
             if data.get(field) is None:
@@ -65,17 +66,20 @@ class ProfileDetailSerializer(
         read_only_fields = ['user', 'username', 'type', 'created_at']
 
     def update(self, instance, validated_data):
+        """Update editable user and profile fields together."""
         user_data = validated_data.pop('user', {})
         self._update_user(instance.user, user_data)
         return self._update_profile(instance, validated_data)
 
     def _update_user(self, user, user_data):
+        """Persist changed related User fields."""
         for field, value in user_data.items():
             setattr(user, field, value)
         if user_data:
             user.save()
 
     def _update_profile(self, instance, profile_data):
+        """Persist changed Profile fields and return the profile."""
         for field, value in profile_data.items():
             setattr(instance, field, value)
         instance.save()
