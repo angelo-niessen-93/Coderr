@@ -9,5 +9,9 @@ app_name = 'reviews_app'
 
 urlpatterns = [
     path('reviews/', ReviewListCreateView.as_view(), name='review-list'),
-    path('reviews/<int:pk>/', ReviewDetailUpdateView.as_view(), name='review-detail'),
+    path(
+        'reviews/<int:pk>/',
+        ReviewDetailUpdateView.as_view(),
+        name='review-detail',
+    ),
 ]
