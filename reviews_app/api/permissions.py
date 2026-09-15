@@ -13,3 +13,12 @@ class IsCustomerReviewer(BasePermission):
             return False
         profile = getattr(request.user, 'profile', None)
         return profile is not None and profile.type == Profile.CUSTOMER
+
+
+class IsReviewOwner(BasePermission):
+    """Allow review edits only by the original reviewer."""
+
+    def has_object_permission(self, request, view, obj):
+        return obj.reviewer == request.user
+
+

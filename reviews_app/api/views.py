@@ -1,10 +1,10 @@
 """Views for review API endpoints."""
 
-from rest_framework.generics import ListCreateAPIView
+from rest_framework.generics import ListCreateAPIView, RetrieveUpdateDestroyAPIView
 from rest_framework.permissions import IsAuthenticated
 
-from reviews_app.api.permissions import IsCustomerReviewer
-from reviews_app.api.serializers import ReviewSerializer
+from reviews_app.api.permissions import IsCustomerReviewer, IsReviewOwner
+from reviews_app.api.serializers import ReviewSerializer, ReviewUpdateSerializer
 from reviews_app.models import Review
 
 
@@ -43,3 +43,21 @@ class ReviewListCreateView(ListCreateAPIView):
 
     def _allowed_ordering(self):
         return {'updated_at', '-updated_at', 'rating', '-rating'}
+
+
+class ReviewDetailUpdateView(RetrieveUpdateDestroyAPIView):
+    """Update a review by review ID."""
+
+    http_method_names = ['patch', 'delete', 'head', 'options']
+    queryset = Review.objects.select_related('business_user', 'reviewer')
+    serializer_class = ReviewUpdateSerializer
+    permission_classes = [IsAuthenticated, IsReviewOwner]
+
+    def partial_update(self, request, *args, **kwargs):
+        response = super().partial_update(request, *args, **kwargs)
+        response.data = ReviewSerializer(self.object).data
+        return response
+
+    def perform_update(self, serializer):
+        self.object = serializer.save()
+

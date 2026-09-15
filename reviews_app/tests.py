@@ -621,4 +621,403 @@ class ReviewListCreateViewTests(APITestCase):
     def _ratings(self, response):
         return [item['rating'] for item in response.data]
 
+class ReviewDetailUpdateViewTests(APITestCase):
+    """Tests for the review PATCH endpoint."""
 
+    def setUp(self):
+        self.reviewer = User.objects.create_user(username='patchReviewer')
+        self.other_customer = User.objects.create_user(username='patchCustomer')
+        self.business = User.objects.create_user(username='patchBusiness')
+        self.other_business = User.objects.create_user(username='patchOtherBusiness')
+        self.staff = User.objects.create_user(username='patchStaff', is_staff=True)
+        self.business_two = User.objects.create_user(username='patchBusinessTwo')
+        self._create_profiles()
+        self.review = self._create_review()
+        self.url = reverse('reviews_app:review-detail', kwargs={'pk': self.review.id})
+
+    def test_reviewer_can_patch_own_review(self):
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_another_customer_gets_forbidden(self):
+        response = self._patch_as(self.other_customer, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_reviewed_business_user_gets_forbidden(self):
+        response = self._patch_as(self.business, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unrelated_business_user_gets_forbidden(self):
+        response = self._patch_as(self.other_business, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_non_owner_gets_forbidden(self):
+        response = self._patch_as(self.staff, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_gets_unauthorized(self):
+        response = self.client.patch(self.url, {'rating': 5}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_rating_only_update_works(self):
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.assertEqual(response.data['rating'], 5)
+
+    def test_description_only_update_works(self):
+        response = self._patch_as(self.reviewer, {'description': 'Updated'})
+        self.assertEqual(response.data['description'], 'Updated')
+
+    def test_rating_and_description_update_works(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'rating': 5, 'description': 'Updated'},
+        )
+        self.assertEqual(response.data['rating'], 5)
+        self.assertEqual(response.data['description'], 'Updated')
+
+    def test_rating_one_is_accepted(self):
+        response = self._patch_as(self.reviewer, {'rating': 1})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_rating_five_is_accepted(self):
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_rating_below_one_returns_bad_request(self):
+        response = self._patch_as(self.reviewer, {'rating': 0})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_rating_above_five_returns_bad_request(self):
+        response = self._patch_as(self.reviewer, {'rating': 6})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_malformed_rating_returns_bad_request(self):
+        response = self._patch_as(self.reviewer, {'rating': 'bad'})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_business_user_field_returns_bad_request(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'business_user': self.business_two.id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_reviewer_field_returns_bad_request(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'reviewer': self.other_customer.id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_id_field_returns_bad_request(self):
+        response = self._patch_as(self.reviewer, {'id': self.review.id})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_created_at_field_returns_bad_request(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'created_at': self.review.created_at.isoformat()},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_updated_at_field_returns_bad_request(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'updated_at': self.review.updated_at.isoformat()},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_valid_rating_with_forbidden_field_returns_bad_request(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'rating': 5, 'business_user': self.business_two.id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_malformed_body_returns_bad_request(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.patch(
+            self.url,
+            data='not-json',
+            content_type='application/json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_business_user_remains_unchanged(self):
+        self._patch_as(self.reviewer, {'rating': 5})
+        self.review.refresh_from_db()
+        self.assertEqual(self.review.business_user, self.business)
+
+    def test_reviewer_remains_unchanged(self):
+        self._patch_as(self.reviewer, {'rating': 5})
+        self.review.refresh_from_db()
+        self.assertEqual(self.review.reviewer, self.reviewer)
+
+    def test_created_at_remains_unchanged(self):
+        created_at = self.review.created_at
+        self._patch_as(self.reviewer, {'rating': 5})
+        self.review.refresh_from_db()
+        self.assertEqual(self.review.created_at, created_at)
+
+    def test_updated_at_changes_after_successful_update(self):
+        updated_at = self.review.updated_at - timedelta(seconds=1)
+        Review.objects.filter(pk=self.review.pk).update(updated_at=updated_at)
+        self.review.refresh_from_db()
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.review.refresh_from_db()
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertGreater(self.review.updated_at, updated_at)
+
+    def test_response_field_set_is_exact(self):
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.assertEqual(set(response.data.keys()), self._review_fields())
+
+    def test_get_detail_is_not_exposed(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_put_detail_is_not_exposed(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.put(self.url, {'rating': 5}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_nonexistent_review_returns_not_found(self):
+        url = reverse('reviews_app:review-detail', kwargs={'pk': 999})
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.patch(url, {'rating': 5}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_review_list_still_works(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.get(reverse('reviews_app:review-list'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_review_create_still_works(self):
+        payload = {
+            'business_user': self.business_two.id,
+            'rating': 4,
+            'description': 'New review.',
+        }
+        self.client.force_authenticate(user=self.other_customer)
+        response = self.client.post(
+            reverse('reviews_app:review-list'),
+            payload,
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_unrelated_app_routes_still_resolve(self):
+        self.assertEqual(reverse('auth_app:login'), '/api/login/')
+        self.assertEqual(reverse('offers_app:offer-create'), '/api/offers/')
+        self.assertEqual(reverse('orders_app:order-create'), '/api/orders/')
+
+    def _create_profiles(self):
+        Profile.objects.create(user=self.reviewer, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.other_customer, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.business, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.other_business, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.business_two, type=Profile.BUSINESS)
+
+    def _create_review(self):
+        return Review.objects.create(
+            business_user=self.business,
+            reviewer=self.reviewer,
+            rating=4,
+            description='Original review.',
+        )
+
+    def _patch_as(self, user, data):
+        self.client.force_authenticate(user=user)
+        return self.client.patch(self.url, data, format='json')
+
+    def _review_fields(self):
+        return {
+            'id',
+            'business_user',
+            'reviewer',
+            'rating',
+            'description',
+            'created_at',
+            'updated_at',
+        }
+
+
+
+class ReviewDetailDeleteViewTests(APITestCase):
+    """Tests for the review DELETE endpoint."""
+
+    def setUp(self):
+        self.reviewer = User.objects.create_user(username='deleteReviewer')
+        self.other_customer = User.objects.create_user(username='deleteCustomer')
+        self.business = User.objects.create_user(username='deleteBusiness')
+        self.other_business = User.objects.create_user(username='deleteOtherBiz')
+        self.staff = User.objects.create_user(username='deleteStaff', is_staff=True)
+        self.no_profile_user = User.objects.create_user(username='deleteNoProfile')
+        self.business_two = User.objects.create_user(username='deleteBusinessTwo')
+        self._create_profiles()
+        self.review = self._create_review(self.business, self.reviewer)
+        self.unrelated_review = self._create_review(
+            self.business_two,
+            self.other_customer,
+        )
+        self.url = reverse('reviews_app:review-detail', kwargs={'pk': self.review.id})
+
+    def test_reviewer_can_delete_own_review(self):
+        response = self._delete_as(self.reviewer)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_delete_returns_no_content_status(self):
+        response = self._delete_as(self.reviewer)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_delete_response_body_is_empty(self):
+        response = self._delete_as(self.reviewer)
+        self.assertEqual(response.content, b'')
+
+    def test_review_no_longer_exists_after_delete(self):
+        self._delete_as(self.reviewer)
+        self.assertFalse(Review.objects.filter(pk=self.review.pk).exists())
+
+    def test_another_customer_gets_forbidden(self):
+        response = self._delete_as(self.other_customer)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_reviewed_business_user_gets_forbidden(self):
+        response = self._delete_as(self.business)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unrelated_business_user_gets_forbidden(self):
+        response = self._delete_as(self.other_business)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_staff_non_owner_gets_forbidden(self):
+        response = self._delete_as(self.staff)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_no_profile_non_owner_gets_forbidden(self):
+        response = self._delete_as(self.no_profile_user)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_unauthenticated_gets_unauthorized(self):
+        response = self.client.delete(self.url)
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_nonexistent_review_returns_not_found(self):
+        url = reverse('reviews_app:review-detail', kwargs={'pk': 999})
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.delete(url)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_reviewer_user_remains_after_delete(self):
+        self._delete_as(self.reviewer)
+        self.assertTrue(User.objects.filter(pk=self.reviewer.pk).exists())
+
+    def test_business_user_remains_after_delete(self):
+        self._delete_as(self.reviewer)
+        self.assertTrue(User.objects.filter(pk=self.business.pk).exists())
+
+    def test_reviewer_profile_remains_after_delete(self):
+        self._delete_as(self.reviewer)
+        self.assertTrue(Profile.objects.filter(user=self.reviewer).exists())
+
+    def test_business_profile_remains_after_delete(self):
+        self._delete_as(self.reviewer)
+        self.assertTrue(Profile.objects.filter(user=self.business).exists())
+
+    def test_unrelated_review_remains_after_delete(self):
+        self._delete_as(self.reviewer)
+        self.assertTrue(
+            Review.objects.filter(pk=self.unrelated_review.pk).exists(),
+        )
+
+    def test_owner_patch_still_returns_ok(self):
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_non_owner_patch_still_returns_forbidden(self):
+        response = self._patch_as(self.other_customer, {'rating': 5})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_patch_allows_rating_and_description_only(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'rating': 5, 'description': 'Updated'},
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_patch_returns_full_review_response(self):
+        response = self._patch_as(self.reviewer, {'rating': 5})
+        self.assertEqual(set(response.data.keys()), self._review_fields())
+
+    def test_patch_forbidden_field_returns_bad_request(self):
+        response = self._patch_as(
+            self.reviewer,
+            {'business_user': self.business_two.id},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_get_detail_is_not_exposed(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_put_detail_is_not_exposed(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.put(self.url, {'rating': 5}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_review_list_still_works(self):
+        self.client.force_authenticate(user=self.reviewer)
+        response = self.client.get(reverse('reviews_app:review-list'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    def test_review_create_still_works(self):
+        payload = {
+            'business_user': self.business_two.id,
+            'rating': 5,
+            'description': 'Fresh review.',
+        }
+        user = User.objects.create_user(username='deleteFreshCustomer')
+        Profile.objects.create(user=user, type=Profile.CUSTOMER)
+        self.client.force_authenticate(user=user)
+        response = self.client.post(
+            reverse('reviews_app:review-list'),
+            payload,
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def _create_profiles(self):
+        Profile.objects.create(user=self.reviewer, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.other_customer, type=Profile.CUSTOMER)
+        Profile.objects.create(user=self.business, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.other_business, type=Profile.BUSINESS)
+        Profile.objects.create(user=self.business_two, type=Profile.BUSINESS)
+
+    def _create_review(self, business_user, reviewer):
+        return Review.objects.create(
+            business_user=business_user,
+            reviewer=reviewer,
+            rating=4,
+            description='Delete test review.',
+        )
+
+    def _delete_as(self, user):
+        self.client.force_authenticate(user=user)
+        return self.client.delete(self.url)
+
+    def _patch_as(self, user, data):
+        self.client.force_authenticate(user=user)
+        return self.client.patch(self.url, data, format='json')
+
+    def _review_fields(self):
+        return {
+            'id',
+            'business_user',
+            'reviewer',
+            'rating',
+            'description',
+            'created_at',
+            'updated_at',
+        }
